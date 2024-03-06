@@ -16,8 +16,23 @@ def option_price(S, K, r, sigma, T, option_type='call'):
     """
     Calculate the option price.
     """
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
+    #S = current price
+    #K = strike price
+    #r = 1 year bond
+    #sigma = degree of variation over the last year
+    #T = time to expiration in years
+    #
+
+    if T <= 0:
+        return 9999
+    xd = sigma * np.sqrt(T)
+    xd2 = K
+
+    if xd != 0 and xd2 != 0:
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        d2 = d1 - sigma * np.sqrt(T)
+    else:
+        return 6666
     if option_type == 'call':
         price = S * stats.norm.cdf(d1) - K * np.exp(-r * T) * stats.norm.cdf(d2)
     else:  # 'put'
@@ -28,11 +43,9 @@ def option_price(S, K, r, sigma, T, option_type='call'):
 def main():
     ticker = input("Enter the ticker symbol: ")
 
-    # Automatic date range for exactly one year
+    # Fetch historical stock prices
     end_date = datetime.now()
     start_date = end_date - timedelta(days=365)
-
-    # Fetch historical stock prices
     stock_data = yf.download(ticker, start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
     stock_data['Daily Return'] = stock_data['Close'].pct_change()
     sigma = stock_data['Daily Return'].std() * np.sqrt(252)  # Annualize sigma
@@ -41,68 +54,82 @@ def main():
     current_price = stock_data['Close'].iloc[-1]
 
     # Fetch the 1-year US Treasury rate
-    # Create a Fred object
     fred = Fred(api_key='81b42521f02d005e5d11afe53a81b757')
-
-    # Retrieve the data
     ONE_YEAR_BONDS = fred.get_series('DGS1')
-
-    # Print the data
     df_sorted = ONE_YEAR_BONDS.sort_index(ascending=False)
     CURRENT_ONE_YEAR_RATE = df_sorted.iloc[0]
     r = CURRENT_ONE_YEAR_RATE
 
     # Fetch options data
     exp_dates = options.get_expiration_dates(ticker)
-    if exp_dates:
-        chain = options.get_options_chain(ticker, exp_dates[0])  # For simplicity, use the first expiration date
-        puts = chain['puts']
-        calls = chain['calls']
-        # Example: Calculate and display for calls (similar for puts)
-        print("Call Options:")
+    target_date = datetime.now() + timedelta(days=365)  # Target date is 12 months from now
 
-        for index, row in calls.iterrows():
-            K = row['Strike']
-            # Extract just the date part from 'Last Trade Date'
-            # Assuming the date format is like '2024-02-29 3:19PM EST'
-            last_trade_date_str = row['Last Trade Date'].split(' ')[0]  # Gets '2024-02-29'
-            last_trade_date = pd.to_datetime(last_trade_date_str, format='%Y-%m-%d')
+    closest_exp_date = min(exp_dates, key=lambda d: abs(datetime.strptime(d, "%B %d, %Y") - target_date))
+    chain = options.get_options_chain(ticker, closest_exp_date)
+    puts = chain['puts']
+    calls = chain['calls']
 
-            # Calculate 'T' using just the date part, ignoring time
-            now_date = datetime.now().date()  # Get the current date without time
-            T = (last_trade_date.date() - now_date).days / 365.0
+    print(f"Ticker: {ticker}")
+    print(f"Current Price: {current_price:.2f}")
+    print(f"1-Year US Treasury Rate: {r:.4f}")
+    print(f"Annualized Volatility (sigma): {sigma:.4f}")
+    print(f"Target Date: {target_date.strftime('%Y-%m-%d')}")
+    print(f"Closest Expiration Date: {closest_exp_date}")
+    print("\nCall Options:")
+    print("{:<10} {:<10} {:<15} {:<20}".format("Strike", "Market", "Calculated", "Difference"))
 
-            calculated_price = option_price(current_price, K, r, sigma, T, 'call')
-            options_data["calls"].append({
-                "Date": last_trade_date_str,
-                "Strike": row['Strike'],
-                "Market Price": row['Last Price'],
-                "Calculated Price": calculated_price if not np.isnan(calculated_price) else None  # Handle NaN values
-            })
+    for index, row in calls.iterrows():
+        K = row['Strike']
+        exp_date = pd.to_datetime(closest_exp_date, format='%B %d, %Y')
+        now_date = datetime.now().date()
+        T = abs((exp_date.date() - now_date).days / 365.0)
 
-    # Similar block for puts...
-        print("Put Options:")
-        for index, row in calls.iterrows():
-            K = row['Strike']
-            # Extract just the date part from 'Last Trade Date'
-            # Assuming the date format is like '2024-02-29 3:19PM EST'
-            last_trade_date_str = row['Last Trade Date'].split(' ')[0]  # Gets '2024-02-29'
-            last_trade_date = pd.to_datetime(last_trade_date_str, format='%Y-%m-%d')
+        calculated_price = option_price(current_price, K, r, sigma, T, 'call')
+        market_price = row['Last Price']
+        difference = calculated_price - market_price if not np.isnan(calculated_price) and not np.isnan(market_price) else None
 
-            # Calculate 'T' using just the date part, ignoring time
-            now_date = datetime.now().date()  # Get the current date without time
-            T = (last_trade_date.date() - now_date).days / 365.0
+        options_data["calls"].append({
+            "Strike": row['Strike'],
+            "Market Price": market_price,
+            "Calculated Price": calculated_price if not np.isnan(calculated_price) else None,
+            "Difference": difference
+        })
 
-            calculated_price = option_price(current_price, K, r, sigma, T, 'put')
-            options_data["puts"].append({
-                "Date": last_trade_date_str,
-                "Strike": row['Strike'],
-                "Market Price": row['Last Price'],
-                "Calculated Price": calculated_price if not np.isnan(calculated_price) else None  # Handle NaN values
-            })
-            options_json = json.dumps(options_data, indent=4)  # 'indent' for pretty printing
+        print("{:<10} {:<10} {:<15} {:<20}".format(
+            K,
+            f"{market_price:.2f}" if not np.isnan(market_price) else "N/A",
+            f"{calculated_price:.2f}" if not np.isnan(calculated_price) else "N/A",
+            f"{difference:.2f}" if difference is not None else "N/A"
+        ))
 
-            # Print or save the JSON string
-            print(options_json)
+    print("\nPut Options:")
+    print("{:<10} {:<10} {:<15} {:<20}".format("Strike", "Market", "Calculated", "Difference"))
+
+    for index, row in puts.iterrows():
+        K = row['Strike']
+        exp_date = pd.to_datetime(closest_exp_date, format='%B %d, %Y')
+        now_date = datetime.now().date()
+        T = abs((exp_date.date() - now_date).days / 365.0)
+
+        calculated_price = option_price(current_price, K, r, sigma, T, 'put')
+        market_price = row['Last Price']
+        difference = calculated_price - market_price if not np.isnan(calculated_price) and not np.isnan(market_price) else None
+
+        options_data["puts"].append({
+            "Strike": row['Strike'],
+            "Market Price": market_price,
+            "Calculated Price": calculated_price if not np.isnan(calculated_price) else None,
+            "Difference": difference
+        })
+
+        print("{:<10} {:<10} {:<15} {:<20}".format(
+            K,
+            f"{market_price:.2f}" if not np.isnan(market_price) else "N/A",
+            f"{calculated_price:.2f}" if not np.isnan(calculated_price) else "N/A",
+            f"{difference:.2f}" if difference is not None else "N/A"
+        ))
+
+
+
 if __name__ == "__main__":
     main()
