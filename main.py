@@ -118,7 +118,7 @@ def main():
     current_price = stock_data['Close'].iloc[-1]
 
     # Fetch US Treasury rates for 3, 6, 12, and 24 months
-    fred = Fred(api_key='81b42521f02d005e5d11afe53a81b757')
+    fred = Fred(api_key='api key goes here')
     if input_rate == '3m':
         BOND_DATA = fred.get_series('DGS3MO')
         days = 30 * 3
